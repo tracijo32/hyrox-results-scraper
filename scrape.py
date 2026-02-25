@@ -72,19 +72,6 @@ def navigate_to_results(driver, season: int, event_main_group: str | None = None
     if number != season:
         raise ValueError(f"Season mismatch: {number} != {season}")
 
-    ## unfortunately, this is not a foolproof way to validate that we're on the right page
-    ## because the event_main_group is not always present in the query params
-    ## so we also check the display name of the event main group
-    ## that also doesn't really work: if an invalid event main group is entered,
-    ## then the results page will just be empty
-    parts = urlparse(driver.current_url)
-    q = dict[str, str](parse_qsl(parts.query))
-    if q.get('event_main_group') != event_main_group:
-        raise ValueError(f"Event main group mismatch: {q.get('event_main_group')} != {event_main_group}")
-    if event_main_group:
-        emg_display, _ = parse_results_display(driver)
-        if emg_display != event_main_group:
-            raise ValueError(f"Event main group mismatch: {emg_display} != {event_main_group}")
     return
 
 def get_element_once_present(driver, selector: str):
@@ -198,10 +185,12 @@ def select_results_from_dropdowns(
     division_dropdown.select_by_index(division_index)
 
     workout_dropdown = get_dropdown(driver, _workout_selector)
-    workout_dropdown.select_by_visible_text('Total')
+    if len(workout_dropdown.options) > 0:
+        workout_dropdown.select_by_visible_text('Total')
 
     age_group_dropdown = get_dropdown(driver, _age_group_selector)
-    age_group_dropdown.select_by_visible_text('All')
+    if len(age_group_dropdown.options) > 0:
+        age_group_dropdown.select_by_visible_text('All')
 
     if gender_index is not None:
         gender_dropdown = get_dropdown(driver, _gender_selector)
