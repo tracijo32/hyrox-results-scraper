@@ -166,11 +166,20 @@ def get_division_options(driver: WebDriver, event_match_string: str) -> dict[int
         i += len(options)
     return {}
 
-_event_main_group_selector = '#default-lists-event_main_group'
-_division_selector = '#event'
-_workout_selector = '#ranking'
-_age_group_selector = '#search\\[age_class\\]'
-_gender_selector = '#search\\[sex\\]'
+def get_main_event_group_dropdown(driver: WebDriver) -> Select:
+    return get_dropdown(driver, _event_main_group_selector)
+
+def get_division_dropdown(driver: WebDriver) -> Select:
+    return get_dropdown(driver, _division_selector)
+
+def get_workout_dropdown(driver: WebDriver) -> Select:
+    return get_dropdown(driver, _workout_selector)
+
+def get_age_group_dropdown(driver: WebDriver) -> Select:
+    return get_dropdown(driver, _age_group_selector)
+
+def get_gender_dropdown(driver: WebDriver) -> Select:
+    return get_dropdown(driver, _gender_selector)
 
 def select_results_from_dropdowns(
     driver: WebDriver, 
@@ -181,19 +190,19 @@ def select_results_from_dropdowns(
     navigate to a specific division and ensure that the results are not filtered 
     by workout or age group we're ranking by total race time and over all age groups
     '''
-    division_dropdown = get_dropdown(driver, _division_selector)
+    division_dropdown = get_division_dropdown(driver)
     division_dropdown.select_by_index(division_index)
 
-    workout_dropdown = get_dropdown(driver, _workout_selector)
+    workout_dropdown = get_workout_dropdown(driver)
     if len(workout_dropdown.options) > 0:
         workout_dropdown.select_by_visible_text('Total')
 
-    age_group_dropdown = get_dropdown(driver, _age_group_selector)
+    age_group_dropdown = get_age_group_dropdown(driver)
     if len(age_group_dropdown.options) > 0:
         age_group_dropdown.select_by_visible_text('All')
 
     if gender_index is not None:
-        gender_dropdown = get_dropdown(driver, _gender_selector)
+        gender_dropdown = get_gender_dropdown(driver)
         gender_dropdown.select_by_index(gender_index)
     return
 
@@ -263,7 +272,7 @@ def scrape_hyrox_season(season: int, progress_bar: bool = True, is_outer: bool =
         'events': []
     }
 
-    main_dropdown = Select(get_element_once_present(driver, _event_main_group_selector))
+    main_dropdown = get_main_event_group_dropdown(driver)
     event_main_groups = {i: opt.text for i, opt in enumerate(main_dropdown.options)}
 
     for i, emg in tqdm(
