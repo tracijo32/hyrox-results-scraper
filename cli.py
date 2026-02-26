@@ -9,6 +9,7 @@ from scrape import (
     launch_driver,
     _log_error
 )
+from utils import get_sex_from_gender
 
 ## stand-alone functions for the CLI
 def scrape_divisions_command(
@@ -65,7 +66,7 @@ def clean_data(seasons: dict):
             'event_main_group': event['event_main_group'],
             'division_name': division['division_name'],
             'gender': gender['gender'],
-            'sex': 'X' if gender['gender'].lower() == 'mixed' else gender['gender'][0].upper(),
+            'sex': get_sex_from_gender(gender['gender']),
             'n_pages': gender['n_pages']
         }
         for season in seasons
@@ -117,7 +118,7 @@ def scrape_leaderboards_command(
     records = [{('event' if k == 'event_id' else k): v for k, v in record.items()} for record in records]
     records = [
         {
-            'sex': 'X' if record["sex"].lower() == 'mixed' else record["sex"][0].upper(),
+            'sex': get_sex_from_gender(record["gender"]),
             'file_path': form_file_path(season=record["season"], event=record["event"], sex=record["sex"]),
             **record
         }

@@ -31,3 +31,13 @@ def retry_on_stale(*, tries: int = 3, delay_s: float = 0.0, on_retry=None):
 def construct_url(base_url: str, path: str, params: dict):
     query_string = urlencode(params)
     return f"{base_url.rstrip('/')}{path}?{query_string}"
+
+def get_sex_from_gender(gender: str):
+    if gender.lower() == 'mixed':
+        return 'X'
+    elif gender.lower() == 'men':
+        return 'M'
+    elif gender.lower() == 'women':
+        return 'W'
+    else:
+        raise ValueError(f"Invalid gender: {gender}")
