@@ -112,15 +112,23 @@ def parse_leaderboard(driver: WebDriver):
         q = dict[bytes, bytes](parse_qsl(parts.query, keep_blank_values=True))
         values['event'] = q['event']
         values['idp'] = q['idp']
+        values['sex'] = q['search[sex]']
         leaderboard_data.append(values)
     return leaderboard_data
 
-def construct_leaderboard_url(season: int, event_id: str, sex: str, page: int):
+def construct_leaderboard_url(
+        season: int, 
+        event: str, 
+        sex: str, 
+        page: int, 
+        **kwargs):
+    if sex not in ['M', 'W', 'X']:
+        raise ValueError(f"Invalid sex: {sex}")
     base_url = 'https://results.hyrox.com'
     path = f'/season-{season}/index.php'
     params = {
         'page': page,
-        'event': event_id,
+        'event': event,
         'pid': 'list',
         'pidp': 'ranking_nav',
         'search[sex]': sex,
@@ -370,10 +378,10 @@ def scrape_leaderboard(
     event: str,
     sex: str,
     page: int,
-    **kwargs
+    **kwargs_ignored
 ):
-    if not sex in ['M', 'F', 'X']:
-        raise ValueError(f"Invalid x: {sex}")
+    if not sex in ['M', 'W', 'X']:
+        raise ValueError(f"Invalid sex: {sex}")
     url = construct_leaderboard_url(season, event, sex, page)
     driver.get(url)
     lb_data = parse_leaderboard(driver)

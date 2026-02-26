@@ -1,6 +1,7 @@
-import typer, json, traceback
-from tqdm import tqdm
+import json
 from pathlib import Path
+
+import typer
 from scrape import (
     scrape_hyrox_season, 
     get_latest_hyrox_season, 
@@ -39,18 +40,19 @@ def scrape_divisions_command(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if progress_bar:
-        from tqdm import tqdm
+        from tqdm import tqdm as _tqdm
     else:
-        tqdm = lambda x, **kwargs: x
+        _tqdm = lambda x, **kwargs: x
 
     typer.echo(f"Scraping seasons from {season_start} to {season_end}...")
     seasons = range(season_start, season_end + 1)
-    for season in tqdm(list(seasons), desc="Seasons"):
+    for season in _tqdm(list(seasons), desc="Seasons"):
         if not overwrite and (out_dir / f"season-{season}.json").exists():
             continue
         season_dict = scrape_hyrox_season(season, progress_bar=progress_bar, is_outer=False)
         out_path = out_dir / f"season-{season}.json"
-        json.dump(season_dict, open(out_path, 'w'), indent=2, ensure_ascii=False)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(season_dict, f, indent=2, ensure_ascii=False)
 
     print(f"Scraped {len(seasons)} seasons from {season_start} to {season_end}")
     return
@@ -74,8 +76,14 @@ def clean_data(seasons: dict):
     ]
     return records
 
-def form_file_path(season: int, event: str, sex: str, **kwargs):
-    from pathlib import Path
+def form_file_path(
+        season: int | str, 
+        event: str, 
+        sex: str, 
+        **kwargs
+    ) -> Path:
+    if not isinstance(season, int) and season != '*':
+        raise ValueError("season must be an integer or '*'")
     dirs = Path(
         f'season={season}',
         f'event={event}',
@@ -89,9 +97,13 @@ def scrape_leaderboards_command(
     overwrite: bool = False,
 ):
     import glob
+    from tqdm import tqdm
     in_dir = Path(in_dir).expanduser()
     season_files = glob.glob(str(in_dir / 'season-*.json'))
-    seasons = [json.load(open(file)) for file in season_files]
+    seasons = []
+    for file in season_files:
+        with open(file, "r", encoding="utf-8") as f:
+            seasons.append(json.load(f))
 
     ## set the output directory and create it if it doesn't exist
     out_dir = Path(out_dir).expanduser()
@@ -105,32 +117,40 @@ def scrape_leaderboards_command(
     records = [{('event' if k == 'event_id' else k): v for k, v in record.items()} for record in records]
     records = [
         {
-            'sex': 'X' if record['gender'].lower() == 'mixed' else record['gender'][0].upper(),
-            'file_path': form_file_path(**record),
+            'sex': 'X' if record["sex"].lower() == 'mixed' else record["sex"][0].upper(),
+            'file_path': form_file_path(season=record["season"], event=record["event"], sex=record["sex"]),
             **record
         }
         for record in records
     ]
-    ## before we do any scraping, we need to check if the files already exist and skip them if they do
-    ## unless we're overwriting them
+
+    ## before we do any scraping, optionally skip records that are already fully scraped
     total_records = len(records)
-    if overwrite:
-        completed = 0
-    else:
-        existing_files = glob.glob(str(out_dir / '**' / '*.json'))
-        records = [
-            record for record in records
-            if str(record['file_path']) not in existing_files
-        ]
-        completed = total_records - len(records)
-        typer.echo(f"Skipping {completed} records that already exist")
+    completed = 0
+    if not overwrite:
+        records_to_scrape = []
+        for record in records:
+            lb_path = out_dir / record["file_path"]
+            all_pages_exist = True
+            for page in range(1, record["n_pages"] + 1):
+                if not (lb_path / f"page={page}.json").exists():
+                    all_pages_exist = False
+                    break
+            if all_pages_exist and record["n_pages"] > 0:
+                completed += 1
+                continue
+            records_to_scrape.append(record)
+        records = records_to_scrape
+        if completed:
+            typer.echo(f"Skipping {completed} records that already exist")
     
     ## scrape the leaderboards: loop through the records and scrape the leaderboard for each page
-    driver = launch_driver()
+    driver = None
     try:
+        driver = launch_driver()
         with tqdm(total=total_records, desc="Scraping leaderboards", initial=completed) as pbar:
             for record in records:
-                lb_path = out_dir / form_file_path(**record)
+                lb_path = out_dir / record["file_path"]
                 lb_path.mkdir(parents=True, exist_ok=True)
                 for page in range(1, record['n_pages'] + 1):
                     file_path = lb_path / f'page={page}.json'
@@ -147,14 +167,16 @@ def scrape_leaderboards_command(
                     out['current_page'] = page
                     out['leaderboard'] = lb_data
 
-                    with open(file_path, 'w') as f:
-                        json.dump(lb_data, f)
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        json.dump(out, f, ensure_ascii=False)
                 pbar.update(1)
         typer.echo(f"Scraped {len(records)} leaderboards")
-    except Exception as e:
-        raise e
     finally:
-        driver.quit()
+        try:
+            if driver is not None:
+                driver.quit()
+        except Exception:
+            pass
 
     return
 
@@ -172,10 +194,10 @@ def scrape_divisions(
     """
     Examples:
 
-      python cli.py scrape-hyrox --season-start 1 --season-end 3 --out-dir data/
-      python cli.py scrape-hyrox --season-start 5 --season-end 5 --no-progress
+      python cli.py scrape-divisions --season-start 1 --season-end 3 --out-dir data/
+      python cli.py scrape-divisions --season-start 5 --season-end 5 --no-progress
     """
-    scrape_divisions(season_start, season_end, progress_bar, out_dir, overwrite)
+    scrape_divisions_command(season_start, season_end, progress_bar, out_dir, overwrite)
 
 @app.command()
 def scrape_leaderboards(
