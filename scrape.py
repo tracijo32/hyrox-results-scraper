@@ -6,10 +6,12 @@ from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
 
 from urllib.parse import urlparse, parse_qsl, urlencode
+import traceback
 import re
+from utils import retry_on_stale
 
 ## CSS selectors
 _event_main_group_selector = '#default-lists-event_main_group'
@@ -37,6 +39,11 @@ def launch_driver(headless: bool = True, width: int = 1800, height: int = 800) -
     driver = webdriver.Chrome(service=service, options=options)
     return driver   
 
+def get_element_once_visible(driver, selector_type: str, selector_text: str, wait: int = 5):
+    return WebDriverWait(driver, wait)\
+        .until(EC.visibility_of_element_located((selector_type, selector_text)))
+
+@retry_on_stale()
 def navigate_to_results(driver, season: int, event_main_group: str | None = None):
     if season < 1:
         raise ValueError(f"season must be an integer greater than 0")
@@ -59,7 +66,7 @@ def navigate_to_results(driver, season: int, event_main_group: str | None = None
         selector_to_wait_for = _event_main_group_selector
 
     driver.get(url)
-    get_element_once_present(driver, selector_to_wait_for)
+    get_element_once_visible(driver, By.CSS_SELECTOR, selector_to_wait_for)
 
     ## if the season we entered is out of range, it will redirect to the latest season
     ## we can check that the paths match to make sure we're on the right page
@@ -74,12 +81,9 @@ def navigate_to_results(driver, season: int, event_main_group: str | None = None
 
     return
 
-def get_element_once_present(driver, selector: str):
-    return WebDriverWait(driver, 2)\
-        .until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-
+@retry_on_stale()
 def parse_leaderboard(driver: WebDriver):
-    leaderboard = driver.find_element(By.CLASS_NAME, 'list-group-multicolumn')
+    leaderboard = get_element_once_visible(driver, By.CLASS_NAME, 'list-group-multicolumn')
     header = leaderboard.find_element(By.CLASS_NAME, 'list-group-header')
 
     column_names = []
@@ -99,8 +103,11 @@ def parse_leaderboard(driver: WebDriver):
     for row in rows:
         if 'list-group-header' in row.get_attribute('class'):
             continue
+        links = row.find_elements(By.TAG_NAME, 'a')
+        if not links:
+            continue
+        link_to_details = links[0].get_attribute('href')
         values = {c:t for c, t in zip(column_names, row.text.split('\n'))}
-        link_to_details = row.find_element(By.TAG_NAME, 'a').get_attribute('href')
         parts = urlparse(link_to_details)
         q = dict[bytes, bytes](parse_qsl(parts.query, keep_blank_values=True))
         values['event'] = q['event']
@@ -108,15 +115,35 @@ def parse_leaderboard(driver: WebDriver):
         leaderboard_data.append(values)
     return leaderboard_data
 
+def construct_leaderboard_url(season: int, event_id: str, sex: str, page: int):
+    base_url = 'https://results.hyrox.com'
+    path = f'/season-{season}/index.php'
+    params = {
+        'page': page,
+        'event': event_id,
+        'pid': 'list',
+        'pidp': 'ranking_nav',
+        'search[sex]': sex,
+        'search[age_class]': '%'
+    }
+    # Encode parameters
+    query_string = urlencode(params)
+
+    # Combine base URL + path + query string
+    full_url = f"{base_url.rstrip('/')}{path}?{query_string}"
+    return full_url
+
+@retry_on_stale()
 def parse_season(driver: WebDriver):
-    switcher = driver.find_element(By.CLASS_NAME, 'view-switcher')
+    switcher = get_element_once_visible(driver, By.CLASS_NAME, 'view-switcher')
     name = switcher.text
     link = switcher.find_element(By.TAG_NAME, 'a').get_attribute('href')
     number = int(re.search(r"/season-(\d+)", link).group(1))
     return number, name
 
+@retry_on_stale()
 def parse_results_display(driver: WebDriver) -> tuple[str, str]:
-    title_element = get_element_once_present(driver, '#cbox-main > div:nth-child(1)')
+    title_element = get_element_once_visible(driver, By.CSS_SELECTOR, '#cbox-main > div:nth-child(1)')
     m = _results_display_pattern.match(title_element.text)
     if not m:
         raise ValueError(f"Unrecognized format: {title_element.text}")
@@ -124,6 +151,7 @@ def parse_results_display(driver: WebDriver) -> tuple[str, str]:
     division_name = m.group(2)
     return event_name, division_name
 
+@retry_on_stale()
 def parse_event_id(driver: WebDriver):
     ''' cycle through all links on the page until you find one that has the "event" parameter'''
     current_parts = urlparse(driver.current_url)
@@ -139,9 +167,11 @@ def parse_event_id(driver: WebDriver):
             return event
     return None
 
+@retry_on_stale()
 def get_dropdown(driver: WebDriver, selector: str):
-    return Select(get_element_once_present(driver, selector))
+    return Select(get_element_once_visible(driver, By.CSS_SELECTOR, selector))
 
+@retry_on_stale()
 def get_division_options(driver: WebDriver, event_match_string: str) -> dict[int, str]:
     '''
     get the division options from the dropdown
@@ -155,7 +185,7 @@ def get_division_options(driver: WebDriver, event_match_string: str) -> dict[int
     options that match the event we want.
     '''
     i = 0
-    division_dropdown_element = get_element_once_present(driver, '#event')
+    division_dropdown_element = get_element_once_visible(driver, By.CSS_SELECTOR, '#event')
     optgroups = division_dropdown_element.find_elements(By.TAG_NAME, 'optgroup')
     for optgroup in optgroups:
         optgroup_label = optgroup.get_attribute('label')
@@ -181,6 +211,7 @@ def get_age_group_dropdown(driver: WebDriver) -> Select:
 def get_gender_dropdown(driver: WebDriver) -> Select:
     return get_dropdown(driver, _gender_selector)
 
+@retry_on_stale()
 def select_results_from_dropdowns(
     driver: WebDriver, 
     division_index: int = 0, 
@@ -206,6 +237,7 @@ def select_results_from_dropdowns(
         gender_dropdown.select_by_index(gender_index)
     return
 
+@retry_on_stale()
 def get_gender_options(driver: WebDriver) -> dict[int, str]:
     try:
         gender_dropdown = get_dropdown(driver, _gender_selector)
@@ -213,6 +245,7 @@ def get_gender_options(driver: WebDriver) -> dict[int, str]:
     except TimeoutException:
         return {}
 
+@retry_on_stale()
 def parse_pagination(driver: WebDriver) -> int:
     '''
     Returns the number of pages of results available.
@@ -244,12 +277,20 @@ def parse_pagination(driver: WebDriver) -> int:
         n_pages = max(n_pages, int(q.get('page', 1)))
     return n_pages
 
+@retry_on_stale()
 def get_latest_hyrox_season():
     driver = launch_driver()
     driver.get('https://results.hyrox.com')
     number, _ = parse_season(driver)
     driver.close()
     return number
+
+def _log_error(exc: Exception):
+    return {
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
 
 def scrape_hyrox_season(season: int, progress_bar: bool = True, is_outer: bool = False):
     if progress_bar:
@@ -281,42 +322,59 @@ def scrape_hyrox_season(season: int, progress_bar: bool = True, is_outer: bool =
         leave=is_outer,
         desc='Events'
     ):
-        navigate_to_results(driver, season, emg)
-        event_dict = {
-            'event_index': i,
-            'event_main_group': emg,
-            'event_id': parse_event_id(driver),
-            'divisions': []
-        }
-
-        division_options = get_division_options(driver, emg)
-        for j, div in tqdm(division_options.items(), leave=False, desc='Divisions'):
-            try:
-                select_results_from_dropdowns(driver, j)
-                event_display_name, division_display_name = parse_results_display(driver)
-                division_dict = {
-                    'division_index': j,
-                    'division_name': div,
-                    'event_display_name': event_display_name,
-                    'division_display_name': division_display_name,
-                    'genders': []
-                }
-                gender_options = get_gender_options(driver)
-                for k, gdr in gender_options.items():
-                    try:
-                        select_results_from_dropdowns(driver, j, k)
-                        gender_dict = {
-                            'gender_index': k,
-                            'gender': gdr,
-                            'n_pages': parse_pagination(driver)
-                        }
-                    except Exception as e:
-                        gender_dict = {'error': str(e)}
-                    division_dict['genders'].append(gender_dict)
-            except Exception as e:
-                division_dict = {'error': str(e)}
-            event_dict['divisions'].append(division_dict)
+        try:
+            navigate_to_results(driver, season, emg)
+            division_options = get_division_options(driver, emg)
+            event_dict = {
+                'event_index': i,
+                'event_id': parse_event_id(driver),
+                'event_main_group': emg,
+                'divisions': []
+            }
+            for j, div in tqdm(division_options.items(), leave=False, desc='Divisions'):
+                try:
+                    select_results_from_dropdowns(driver, j)
+                    event_display_name, division_display_name = parse_results_display(driver)
+                    division_dict = {
+                        'division_index': j,
+                        'division_name': div,
+                        'event_id': parse_event_id(driver), ## re-parse event_id to get the correct event_id for the division
+                        'event_display_name': event_display_name,
+                        'division_display_name': division_display_name,
+                        'genders': []
+                    }
+                    gender_options = get_gender_options(driver)
+                    for k, gdr in gender_options.items():
+                        try:
+                            select_results_from_dropdowns(driver, j, k)
+                            gender_dict = {
+                                'gender_index': k,
+                                'gender': gdr,
+                                'n_pages': parse_pagination(driver)
+                            }
+                        except Exception as e:
+                            gender_dict = {'gender_index': k, **_log_error(e)}
+                        division_dict['genders'].append(gender_dict)
+                except Exception as e:
+                    division_dict = {'division_index': k, **_log_error(e)}
+                event_dict['divisions'].append(division_dict)
+        except Exception as e:
+            event_dict = {'event_index': i, 'error': _log_error(e)}
         season_dict['events'].append(event_dict)
     driver.quit()
     return season_dict
-    
+
+def scrape_leaderboard(
+    driver: WebDriver, 
+    season: int,
+    event: str,
+    sex: str,
+    page: int,
+    **kwargs
+):
+    if not sex in ['M', 'F', 'X']:
+        raise ValueError(f"Invalid x: {sex}")
+    url = construct_leaderboard_url(season, event, sex, page)
+    driver.get(url)
+    lb_data = parse_leaderboard(driver)
+    return lb_data
