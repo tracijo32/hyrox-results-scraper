@@ -1,5 +1,6 @@
 import time
 import functools
+from urllib.parse import urlencode
 from selenium.common.exceptions import StaleElementReferenceException
 
 def retry_on_stale(*, tries: int = 3, delay_s: float = 0.0, on_retry=None):
@@ -26,3 +27,7 @@ def retry_on_stale(*, tries: int = 3, delay_s: float = 0.0, on_retry=None):
             raise last_exc  # should be unreachable
         return wrapper
     return decorator
+
+def construct_url(base_url: str, path: str, params: dict):
+    query_string = urlencode(params)
+    return f"{base_url.rstrip('/')}{path}?{query_string}"

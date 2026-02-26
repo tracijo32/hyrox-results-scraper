@@ -11,7 +11,7 @@ from selenium.common.exceptions import TimeoutException, StaleElementReferenceEx
 from urllib.parse import urlparse, parse_qsl, urlencode
 import traceback
 import re
-from utils import retry_on_stale
+from utils import retry_on_stale, construct_url
 
 ## CSS selectors
 _event_main_group_selector = '#default-lists-event_main_group'
@@ -110,9 +110,7 @@ def parse_leaderboard(driver: WebDriver):
         values = {c:t for c, t in zip(column_names, row.text.split('\n'))}
         parts = urlparse(link_to_details)
         q = dict[bytes, bytes](parse_qsl(parts.query, keep_blank_values=True))
-        values['event'] = q['event']
         values['idp'] = q['idp']
-        values['sex'] = q['search[sex]']
         leaderboard_data.append(values)
     return leaderboard_data
 
@@ -134,12 +132,7 @@ def construct_leaderboard_url(
         'search[sex]': sex,
         'search[age_class]': '%'
     }
-    # Encode parameters
-    query_string = urlencode(params)
-
-    # Combine base URL + path + query string
-    full_url = f"{base_url.rstrip('/')}{path}?{query_string}"
-    return full_url
+    return construct_url(base_url, path, params)
 
 @retry_on_stale()
 def parse_season(driver: WebDriver):
